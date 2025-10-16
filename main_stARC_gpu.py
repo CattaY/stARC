@@ -28,19 +28,19 @@ import torch
 #%% Settings
 arg, groups = fst.args()
 # ##################### Data Mark ######################
-arg['dataset'] = 'M_Henon_ns=0.01'#'M_Henon_ns=0.01','Coupled_ADVP2_ns=0.001','Coupled_Lorenz_ns=0.10_Trans'
-parent_doc = 'Robust'# _noise, _windows, Models_noisefree
+arg['dataset'] = 'M_Henon_ns=0.01'
+parent_doc = 'Models'
 data_start = 3000
-num_dev = 1
+num_dev = 1 # num of dominant eigenvalues
 arg['ns'] = 0.2 # noise strength of data
 arg['bif_point_para'] = 9000-data_start
-arg['bif_point_obsvt'] = 9250-data_start #9250-data_start, 10500-data_start, -1
+arg['bif_point_obsvt'] = -1
 arg['win_step'] = 20
 arg['num_win'] = 500
 # ##################### Algorithm Setting ######################
 arg['GPUid'] = '0'
 arg['num_iter'] = 1
-arg['if_stPCA'] = True
+arg['if_z'] = True
 arg['neigh'] = True
 arg['NNkey'] = 'RC0'  # 'RC0'
 device = torch.device("cuda:" + arg['GPUid'] if torch.cuda.is_available() else "cpu")
@@ -64,10 +64,6 @@ arg['theta'] = 0.1  # [0, 1], 值越小受到邻居的影响越小
 arg['nn'] = 0 if not arg['neigh'] else arg['nn']
 print("✅ 参数设置成功！")
 # %% 主要部分
-# for arg['dataset'] in ['M_Henon2_ns=0.10', 'Coupled_Lorenz_ns=0.10', 'Coupled_Lorenz_ns=0.20', 'Coupled_Lorenz_ns=0.50',
-#                        'Coupled_ADVP_ns=0.001', 'Coupled_ADVP_ns=0.002', 'M_Henon_ns=0.10']:
-# for arg['ns'] in [0.1, 0.2, 0.5]:
-# for arg['win_m'] in [80, 90, 110, 120]:
 for iter in range(arg['num_iter']):
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
     print('\nStart time: ', timestamp)
@@ -140,4 +136,5 @@ for iter in range(arg['num_iter']):
     fpa.plot_perf_stARC(summary, data_show, ews_point, ews_window,
                         data_xlims, win_xlims, path, color_map, num_dev=num_dev, **arg)
     print("✅ 单次实验操作全部完成！")
+
 print("✅ 所有实验操作完成！")
