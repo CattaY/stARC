@@ -145,9 +145,9 @@ def R_fun_yes(udata: torch.Tensor, W_in, W_r,  r0=False, *W_b, **kwargs):
         x1 = torch.matmul(W_r, r_tmp[:, ti])
         x2 = torch.matmul(W_in, udata[:, ti])
         if type(W_b) == torch.Tensor:
-            r_tmp[:, ti+1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2+W_b)
+            r_tmp[:, ti+1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2+W_b, **kwargs)
         else:
-            r_tmp[:, ti + 1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2)
+            r_tmp[:, ti + 1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2, **kwargs)
     r_all = r_tmp[:, 1+len_washout:]
     return r_all
 
@@ -155,8 +155,6 @@ def Mapping(data: torch.Tensor, **arg):
     device = torch.device("cuda:" + arg['GPUid'] if torch.cuda.is_available() else "cpu")
     if arg['NNkey'] == 'N':
         input_data = data
-    elif arg['NNkey'] == 'Kernel':
-        input_data = Kfun(data, **arg)
     else:
         Ws = RC_ge(**arg)
         W_in = torch.from_numpy(Ws["W_in"]).float().to(device)
@@ -181,16 +179,8 @@ def best_smap_para(batch_data, batch_ori, **arg):
     norm_z = (flat_z - torch.mean(flat_z)) # flat_z # (flat_z - torch.mean(flat_z)) #/ torch.std(flat_z)
     norm_z = norm_z.cpu().numpy()
     data_dev = pd.DataFrame({"X": norm_z})
-    # train_start, train_end = 1, int(0.5 * len(norm_z))
-    # pred_start, pred_end = int(0.75 * len(norm_z)+1), len(norm_z)
     train_start, train_end = 1, len(norm_z)-1
     pred_start, pred_end = 2, len(norm_z)
-    # if arg['if_stPCA'] == True:
-    #     train_start, train_end = 1, arg['win_m']
-    #     pred_start, pred_end = arg['win_m'], len(norm_z)
-    # else:
-    #     train_start, train_end = 1, len(norm_z) - 1
-    #     pred_start, pred_end = 2, len(norm_z)
     Eresults = pyEDM.EmbedDimension(
         dataFrame=data_dev, columns='X', target='X',
         maxE=min(arg['L'], 10),
@@ -399,5 +389,6 @@ def stARC(xx_noise, path, groups, if_plot=True, **arg):
         with open(path + '/Evalues_Smap.pkl', 'wb') as f:
             pickle.dump(Evalues_Smap, f)
         return {"devs1": dev1_pool, "devs2": dev2_pool, "sd(Z)": var_y_pool, "flat_z": flatz_pool}, arg
+
 
 
