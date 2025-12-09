@@ -5,7 +5,7 @@ importlib.invalidate_caches()
 import os
 import sys
 # 定义模块绝对路径
-MODULE_PATH = "/home/yangna/JetBrains/stARC/GPU_stARC"
+MODULE_PATH = "../stARC/GPU_stARC"
 MODULE_FILE = "func_stARC_gpu.py"
 FULL_PATH = os.path.join(MODULE_PATH, MODULE_FILE)
 # 验证文件是否存在
@@ -42,7 +42,7 @@ arg['GPUid'] = '0'
 arg['num_iter'] = 1
 arg['if_z'] = True
 arg['neigh'] = True
-arg['NNkey'] = 'RC0'  # 'RC0'
+arg['NNkey'] = 'RC'  
 device = torch.device("cuda:" + arg['GPUid'] if torch.cuda.is_available() else "cpu")
 # ####################### Reservoir ########################
 arg['fun_act'] = 'tanh'
@@ -70,11 +70,11 @@ for iter in range(arg['num_iter']):
     # #############读取数据#############
     if any(s in arg['dataset'] for s in ["Henon", "ADVP", "Lorenz"]):
         # #########建立存储结果文件夹#########
-        path = "/home/yangna/JetBrains/Figures/%s/[%s] %s_ns=%.1f" % (parent_doc, timestamp, arg['dataset'], arg['ns'])
+        path = "../Figures/%s/[%s] %s_ns=%.1f" % (parent_doc, timestamp, arg['dataset'], arg['ns'])
         if not os.path.exists(path):
             os.makedirs(path)
         # #########  读取data  ###############
-        all_data = np.loadtxt('/home/yangna/JetBrains/Data/BifurData/%s.txt' % arg['dataset'], delimiter=',')
+        all_data = np.loadtxt('../Data/%s.txt' % arg['dataset'], delimiter=',')
         data = np.transpose(all_data[data_start:, :])
     else:
         print("Finding no corresponding dataset.")
@@ -138,3 +138,4 @@ for iter in range(arg['num_iter']):
     print("✅ 单次实验操作全部完成！")
 
 print("✅ 所有实验操作完成！")
+
