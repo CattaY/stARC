@@ -19,10 +19,10 @@ def args():
     parser.add_argument('-num_iter', default=1, type=int, help="Number of iterations")
     parser.add_argument('-win_step', default=1, type=int, help="Window step")
     parser.add_argument('-num_win', default=-1, type=int, help="Number of windows")
-    parser.add_argument('-if_z', default=True, type=bool, help="Dimension reduction or not")
+    parser.add_argument('-if_z', default=True, type=bool, help="Extract a latent representation or not")
     parser.add_argument('-neigh', default=False, type=bool, help="Number of neighbor")
     parser.add_argument('-NNkey', default='N', type=str,
-                        choices=['N', 'kernel', 'RC0'],
+                        choices=['N', 'RC'],
                         help="Type of neural network")
     grouped_args = {}
     #### data mark
@@ -33,14 +33,15 @@ def args():
     parser.add_argument('-bif_point_para', default=-1, type=int, help="Bifurcation point based on parameter")
     parser.add_argument('-bif_point_obsvt', default=-1, type=int, help="Bifurcation point based on observation")
     grouped_args['data_group'] = ['dataset', 'label', 'datashape', 'ns', 'bif_point_para', 'bif_point_obsvt']
-    #### z
-    z_group = parser.add_argument_group('parameters related to stPCA')
-    z_group.add_argument('-ran_idx', default=0, type=int, help="Select some dimension for DEV analysis")
-    z_group.add_argument('-win_m', default=10, type=int, help="length of each window")
-    z_group.add_argument('-L', default=3, type=int, help="Embedding dimension")
-    z_group.add_argument('-lam', default=0.2, type=float, help="1-lambda in Manuscript")
-    grouped_args['z_group'] = ['win_m', 'L', 'lam', 'ran_idx']
-    #### neighbor
+    #### stPCA
+    stPCA_group = parser.add_argument_group('parameters related to stPCA')
+    stPCA_group.add_argument('-ran_idx', default=0, type=int, help="Select some dimension for DEV analysis")
+    stPCA_group.add_argument('-pkernel', default=None, type=str, help="Type of PCA")
+    stPCA_group.add_argument('-win_m', default=10, type=int, help="length of each window")
+    stPCA_group.add_argument('-L', default=3, type=int, help="Embedding dimension")
+    stPCA_group.add_argument('-lam', default=0.2, type=float, help="1-lambda in Manuscript")
+    grouped_args['stPCA_group'] = ['win_m', 'L', 'lam', 'pkernel', 'ran_idx']
+    #### CCM neighbor
     neighbor_group = parser.add_argument_group('parameters related to CCM neighbor')
     neighbor_group.add_argument('-nn', default=3, type=int, help="Number of neighbor")
     neighbor_group.add_argument('-dm', default='euclidean', type=str, help="Distance measurement")
@@ -62,7 +63,12 @@ def args():
     RC_group.add_argument('-rho', default=1, type=float, help="Spectral radius of reservoir")
     RC_group.add_argument('-warmup_steps', default=0, type=int, help="Warmup steps of reservoir")
     grouped_args['RC_group'] = ['fun_act', 'nodes', 'deg', 'aa', 'alpha', 'rho', 'warmup_steps']
-
+    #### Neural Network Hyperparameters
+    NN_group = parser.add_argument_group('parameters related to neural network, when NNkey==\'kernel\'')
+    NN_group.add_argument('-Nkernel', default='rbf', type=str,
+                          help="Type of kernel function when using kernel function")
+    NN_group.add_argument('-kpara', default=(0, 0), type=tuple, help="Parameters of the kernel function")
+    grouped_args['NN_group'] = ['Nkernel', 'kpara']
     args, unknown = parser.parse_known_args()
     return vars(args), grouped_args
 
@@ -78,45 +84,125 @@ def group_args(args, groups):
         grouped_dict[group_name] = {arg: args[arg] for arg in arg_names}
     return grouped_dict
 
+
+def stARC_z(traindata: torch.Tensor, ori_data: torch.Tensor = None, **kwargs):
+    device = torch.device("cuda:" + kwargs['GPUid'] if torch.cuda.is_available() else "cpu")
+    traindata = traindata.to(dtype=torch.float32)
+    lam = kwargs.get("lam", 0.2) ### 1-lambda in Manuscript
+    L = kwargs.get("L", 3)
+    neigh = kwargs['neigh']
+    [n, m] = traindata.shape
+    if neigh == False:
+        X = traindata    ## n*m, input_dimensions*trainlength
+    else:
+        if type(ori_data) != torch.Tensor:
+            print('No original states when considering neighbors.')
+            return
+        elif type(ori_data) == torch.Tensor and len(ori_data.T)!= len(traindata.T):
+            print('Not match in stARC_z')
+            return
+        else:
+            nn = kwargs.get("nn", 3)
+            dm = kwargs.get("dm", 'euclidean')
+            theta = kwargs.get("theta", 0.5)
+            ori_data = ori_data.to(dtype=torch.float32)
+            dis_matrix = torch.cdist(ori_data.T, ori_data.T, p=2)  ##m*m, 行向量间的距离
+            # dis_matrix = squareform(dis_matrix)
+            v = torch.zeros((m, nn+1), dtype=torch.float32).to(device)
+            X = torch.zeros((n, m), dtype=torch.float32).to(device)
+            for i in range(m):
+                sorted_dis, disInd = torch.sort(dis_matrix[i, :])
+                disInd = disInd[:nn+1]
+                mean_dis = torch.mean(sorted_dis[: nn+1])
+                if mean_dis<=0.05:
+                    X[:, i] = torch.mean(traindata[:, disInd], dim=1)
+                else:
+                    u = torch.exp(-sorted_dis[: nn+1]/mean_dis)
+                    u = u/sum(u)
+                    v[i, 0] = (1-theta)*u[0]
+                    v[i, 1:] = theta*u[1:]
+                    X[:, i] = torch.matmul(traindata[:, disInd], v[i,:])  #n*m
+
+    P=X[:, 1:]     ## n*(m-1)
+    Q=X[:,:-1]     ## n*(m-1)
+    b=1-lam          ## lambda in Manuscript
+    ##### Z
+    H = torch.zeros((n*L, n*L)).to(device)
+    XX = torch.matmul(X, X.T)
+    PP = torch.matmul(P, P.T)
+    PQ = torch.matmul(P, Q.T)
+    QP = torch.matmul(Q, P.T)
+    QQ = torch.matmul(Q, Q.T)
+    H[:n, :n] = lam*XX-b*PP
+    H[:n, n:2*n] = b*PQ
+    for j in range(2, L, 1):
+        H[n*(j-1):n*j, n*(j-1)-n:n*j-n] = b*QP
+        H[n*(j-1):n*j, n*(j-1):n*j] = lam*XX-b*PP-b*QQ
+        H[n*(j-1):n*j, n*(j-1)+n:n*j+n] = b*PQ
+    H[n*(L-1):n*L, n*(L-2):n*(L-1)] = b*QP
+    H[n*(L-1):n*L, n*(L-1):n*L] = lam*XX-b*QQ
+
+    D, V = torch.linalg.eig(H)
+    ao = torch.real(D)
+    aa, eigvIdx = torch.sort(ao, descending=True)  ## 特征值由大到小排序
+    V = V[:, eigvIdx]
+    if aa[0] > 0: # and abs(aa[0])>=abs(aa[-1]):
+        cW = V[:, 0]
+    else:
+        cW = V[:, -1]
+    W = cW.view(L, n)
+    W = torch.real(W).float()
+    Z = (max(abs(aa))*torch.matmul(W, X)).T   # Z.T in Manuscript ## X: n*m, W: n*L, Z: m*L
+    ## Flat Z
+    Z = torch.real(Z)
+    [z_rows, z_cols] = Z.shape  ## L, m
+    flat_z = []  # Z矩阵到z(1,...,m)的转换
+    for zi in range(z_rows):
+        tmp = []
+        for zj in range(z_cols):
+            if zi - zj < 0:
+                break
+            tmp.append(Z[zi - zj, zj])
+        tmp = torch.tensor(tmp).flatten()
+        flat_z.append(torch.mean(tmp))
+    flat_z = torch.tensor(flat_z).flatten()
+
+    flat_z_pred = []
+    for zj in range(1, z_cols, 1):
+        num = z_cols - zj + 1
+        tmp = []
+        for ni in range(num):
+            zi = z_rows - ni - 1
+            tmp.append(Z[zi, zj + ni - 1])
+        tmp = torch.tensor(tmp).flatten()
+        flat_z_pred.append(torch.mean(tmp))
+    flat_z_pred = torch.tensor(flat_z_pred).flatten()
+    # flat_z_total = torch.cat((flat_z, flat_z_pred))
+    var_y = torch.norm(Z, p='fro')
+    return {'Z': Z, 'eigvalue': max(abs(aa)),
+            'var_y': var_y, 'flat_z': flat_z}
+
 ##########defining defining W_in, W_r, W_b of RC##########
 def RC_ge(**arg):
     flag = [arg['nodes'], arg['aa'], arg['datashape'][0]]
-    if arg['NNkey'] == 'RC0':
-        [n, a, dim] = flag
-        n = int(n)
-        dim = int(dim)
-        #######defining W_in and W_b
-        W_in = np.zeros((n, dim))
-        n_win = n - n % dim
-        index = np.random.permutation(range(n))
-        index = index[:n_win]
-        index = np.reshape(index, [int(n_win / dim), dim])
-        for d in range(dim):
-            W_in[index[:, d], d] = a * (2 * np.random.rand(int(n_win / dim)) - 1)
-        W_b = a * (2 * np.random.rand(n) - 1)
-        sample = random.randint(1, 10000)
-        W_r = np.loadtxt("/home/yangna/JetBrains/Data/Wr_groups/k=%.2f/%in%i/Wr_%in%i_a5_%i.txt"
-                         % (arg['deg'], int(arg['deg'] * arg['nodes']), arg['nodes'],
-                            int(arg['deg'] * arg['nodes']), arg['nodes'], sample),
-                         delimiter=",")
-        W_r = arg['rho'] * W_r
-    else:
-        n = arg['nodes']
-        dim = arg['datashape'][0]
-        a = arg['aa']
-        #######defining W_in and W_b
-        W_in = np.zeros((n, dim))
-        W_r = np.zeros((n, n))
-        n_win = n - n % dim
-        n_gr = int(n_win / dim)  ## 每组神经元的个数
-        for d in range(dim):
-            W_in[d * n_gr:(d + 1) * n_gr, d] = a * (2 * np.random.rand(n_gr) - 1)
-        W_b = a * (2 * np.random.rand(n) - 1)
-        for k in range(dim):
-            sample = random.randint(1, 10000)
-            tmp = np.loadtxt("/home/yangna/JetBrains/Data/Wr_groups/k=%.2f/%in%i/Wr_%in%i_a5_%i.txt" % (
-            arg['deg'], int(arg['deg'] * n_gr), n_gr, int(arg['deg'] * n_gr), n_gr, sample), delimiter=",")
-            W_r[k * n_gr:(k + 1) * n_gr, k * n_gr:(k + 1) * n_gr] = tmp
+    [n, a, dim] = flag
+    n = int(n)
+    dim = int(dim)
+    #######defining W_in and W_b
+    W_in = np.zeros((n, dim))
+    n_win = n - n % dim
+    index = np.random.permutation(range(n))
+    index = index[:n_win]
+    index = np.reshape(index, [int(n_win / dim), dim])
+    for d in range(dim):
+        W_in[index[:, d], d] = a * (2 * np.random.rand(int(n_win / dim)) - 1)
+    W_b = a * (2 * np.random.rand(n) - 1)
+    sample = random.randint(1, 10000)
+    W_r = np.loadtxt("../Data/Wr_groups/k=%.2f/%in%i/Wr_%in%i_a5_%i.txt"
+                     % (arg['deg'], int(arg['deg'] * arg['nodes']), arg['nodes'],
+                        int(arg['deg'] * arg['nodes']), arg['nodes'], sample),
+                     delimiter=",")
+    W_r = arg['rho'] * W_r
     return {'W_in': W_in, 'W_b': W_b, 'W_r': W_r}
 
 def afunc(x, **kwargs):
@@ -127,7 +213,6 @@ def afunc(x, **kwargs):
     elif kwargs.get("fun_act") == 'ELU':
         return torch.where(x > 0, x/10e4, 10e4 * (torch.exp(x) - 1)/10e4)
     elif kwargs.get("fun_act") == 'tanh':
-        # return torch.tanh(x)
         return torch.tanh(x/10e20)
     else:
         return x
@@ -145,9 +230,9 @@ def R_fun_yes(udata: torch.Tensor, W_in, W_r,  r0=False, *W_b, **kwargs):
         x1 = torch.matmul(W_r, r_tmp[:, ti])
         x2 = torch.matmul(W_in, udata[:, ti])
         if type(W_b) == torch.Tensor:
-            r_tmp[:, ti+1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2+W_b, **kwargs)
+            r_tmp[:, ti+1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2+W_b)
         else:
-            r_tmp[:, ti + 1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2, **kwargs)
+            r_tmp[:, ti + 1] = (1 - alpha) * r_tmp[:, ti] + alpha * afunc(x1+x2)
     r_all = r_tmp[:, 1+len_washout:]
     return r_all
 
@@ -155,6 +240,8 @@ def Mapping(data: torch.Tensor, **arg):
     device = torch.device("cuda:" + arg['GPUid'] if torch.cuda.is_available() else "cpu")
     if arg['NNkey'] == 'N':
         input_data = data
+    elif arg['NNkey'] == 'Kernel':
+        input_data = Kfun(data, **arg)
     else:
         Ws = RC_ge(**arg)
         W_in = torch.from_numpy(Ws["W_in"]).float().to(device)
@@ -179,6 +266,8 @@ def best_smap_para(batch_data, batch_ori, **arg):
     norm_z = (flat_z - torch.mean(flat_z)) # flat_z # (flat_z - torch.mean(flat_z)) #/ torch.std(flat_z)
     norm_z = norm_z.cpu().numpy()
     data_dev = pd.DataFrame({"X": norm_z})
+    # train_start, train_end = 1, int(0.5 * len(norm_z))
+    # pred_start, pred_end = int(0.75 * len(norm_z)+1), len(norm_z)
     train_start, train_end = 1, len(norm_z)-1
     pred_start, pred_end = 2, len(norm_z)
     Eresults = pyEDM.EmbedDimension(
@@ -317,13 +406,13 @@ def stARC(xx_noise, path, groups, if_plot=True, **arg):
         print("-" * 80)
 
         def parallel(index, batch, batch_ori):
-            if not arg['if_stPCA']:
+            if not arg['if_z']:
                 flat_z = batch[arg['ran_idx'], :]
                 temp_var_y = torch.std(flat_z)
             else:
                 input_data = batch
                 traindata = input_data - torch.mean(input_data, dim=1, keepdim=True)
-                stPCA_results = latent(traindata, ori_data=batch_ori,
+                stPCA_results = stARC_z(traindata, ori_data=batch_ori,
                                       **arg)  # Z.T in Manuscript ## X: n*m, W: n*L, Z: m*L
                 temp_var_y = stPCA_results.get('var_y')
                 flat_z = stPCA_results.get('flat_z')
@@ -360,10 +449,6 @@ def stARC(xx_noise, path, groups, if_plot=True, **arg):
                 devs_tmp[k - 1, :] = sorted_val
                 dev_tmp[k - 1] = (Evalue[temInd[0]])
                 dev_tmp_2[k - 1] = (Evalue[temInd[1]])
-            # return [magnitude_median(dev_tmp), magnitude_median(dev_tmp_2), [index, devs_tmp],
-            #             flat_z, temp_var_y, stats]
-            # min_abs_value, min_index = torch.abs(dev_tmp).min()
-            # min_abs_value_2, min_index_2 = torch.abs(dev_tmp_2).min()
             min_index = torch.argmin(abs(dev_tmp))
             min_index_2 = torch.argmin(abs(dev_tmp_2))
             return [dev_tmp[min_index], dev_tmp_2[min_index_2], [index, devs_tmp],
@@ -390,5 +475,28 @@ def stARC(xx_noise, path, groups, if_plot=True, **arg):
             pickle.dump(Evalues_Smap, f)
         return {"devs1": dev1_pool, "devs2": dev2_pool, "sd(Z)": var_y_pool, "flat_z": flatz_pool}, arg
 
+def Save_mainresluts(main_results, path, **arg):
+    devs1 = main_results["devs1"]
+    devs2 = main_results["devs2"]
+    sdZ = main_results["sd(Z)"]
+    flatZs = main_results["flat_z"]
+    win_id = np.arange(1, arg["num_win"] + 1, 1)
+    # ################################      保存结果        ####################################
+    summary = pd.DataFrame({"win_id": win_id,
+                            "devs1_real": torch.real(devs1).cpu().numpy(),
+                            "devs1_imag": torch.imag(devs1).cpu().numpy(),
+                            "devs1_str": devs1.cpu().numpy().astype(str),
+                            "devs2_real": torch.real(devs2).cpu().numpy(),
+                            "devs2_imag": torch.imag(devs2).cpu().numpy(),
+                            "devs2_str": devs2.cpu().numpy().astype(str),
+                            "sd(Z)": sdZ.cpu().numpy()}
+                           )
+    summary.to_csv(path + "/summary_%s.txt" % arg["label"], index=False)
 
+    # 保存 flatZs 为 TXT文件，添加多行注释
+    comments = """# flatz - 数组\n# 行向量为窗口的flatz\n# 数据开始："""
+    np.savetxt(path + "/flatZs_%s.txt" % arg["label"], flatZs.cpu().numpy(),
+               header=comments, comments='',  # 禁用默认的注释符
+               fmt='%.6f')  # 保留6位小数
+    return
 
