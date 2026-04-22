@@ -7,8 +7,10 @@ submitted to Nature Communications.
 
     ├── Data/
       ├── Random_Wr_generation.py          # Generating random Wr of reservoir networks
+      ├── Peter_lake.csv                   # Fish community structure data used in research 
       └── Simulation_data_generation.py    # Generating simulation data
     ├── main/
+      ├── environment.yml                  # environment
       ├── func_perf_assess.py              # functions of evaluating stARC
       ├── func_stARC_gpu.py                # functions of stARC
       └── main_stARC_gpu.py                # Main execution pipeline
