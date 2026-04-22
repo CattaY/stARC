@@ -18,7 +18,6 @@ print('\nStart time: ', timestamp)
 # ##################### Data Mark ######################
 arg['dataset'] = 'Peter_lake'
 num_dev = 2 # num of dominant eigenvalues
-num_dev = 2
 all_data = pd.read_csv('../Data/%s.csv' % arg['dataset'],
                         delimiter=',', header=0, comment='#')
 tsid = 2009;
