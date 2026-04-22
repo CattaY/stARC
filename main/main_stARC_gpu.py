@@ -19,7 +19,7 @@ print('\nStart time: ', timestamp)
 arg['dataset'] = 'Peter_lake'
 num_dev = 2 # num of dominant eigenvalues
 num_dev = 2
-all_data = pd.read_csv('/home/yangna/JetBrains/Data/BifurData/%s.csv' % arg['dataset'],
+all_data = pd.read_csv('../Data/%s.csv' % arg['dataset'],
                         delimiter=',', header=0, comment='#')
 tsid = 2009;
 # #########建立存储结果文件夹########
